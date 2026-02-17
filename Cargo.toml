@@ -24,6 +24,7 @@ bevy = { version = "0.18", default-features = false, features = [
 ] }
 fluent = "0.16.0"
 fluent-langneg = "0.13.0"
+fluent-syntax = "0.11.1"
 fluent_content = "0.0.5"
 futures-lite = "2.2.0"
 indexmap = { version = "2.2.5", features = ["serde"] }
