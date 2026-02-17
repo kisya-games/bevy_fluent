@@ -8,6 +8,7 @@ use bevy::{
     reflect::TypePath,
 };
 use fluent::{bundle::FluentBundle, FluentResource};
+use fluent_syntax::ast::Entry;
 use intl_memoizer::concurrent::IntlLangMemoizer;
 use serde::{Deserialize, Serialize};
 use std::{ops::Deref, path::PathBuf, str, sync::Arc};
@@ -20,13 +21,18 @@ pub type ConcurrentFluentBundle = FluentBundle<Arc<FluentResource>, IntlLangMemo
 ///
 /// Collection of [`FluentResource`]s for a single locale
 #[derive(Asset, Clone, TypePath)]
-pub struct BundleAsset(pub Arc<ConcurrentFluentBundle>);
+pub struct BundleAsset {
+    /// The fluent bundle containing all resources for this locale
+    pub bundle: Arc<ConcurrentFluentBundle>,
+    /// Message keys contained in this bundle (for validation)
+    pub message_keys: Vec<String>,
+}
 
 impl Deref for BundleAsset {
     type Target = FluentBundle<Arc<FluentResource>, IntlLangMemoizer>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.bundle
     }
 }
 
@@ -97,6 +103,7 @@ async fn load(
     customize: impl Fn(&mut ConcurrentFluentBundle),
 ) -> Result<BundleAsset> {
     let mut bundle = FluentBundle::new_concurrent(vec![data.locale.clone()]);
+    let mut message_keys = Vec::new();
     customize(&mut bundle);
     for mut path in data.resources {
         if path.is_relative() {
@@ -111,6 +118,13 @@ async fn load(
             .load(path)
             .await?;
         let resource = loaded.get::<ResourceAsset>().unwrap();
+
+        for entry in resource.entries() {
+            if let Entry::Message(msg) = entry {
+                message_keys.push(msg.id.name.to_string());
+            }
+        }
+
         if let Err(errors) = bundle.add_resource(resource.0.clone()) {
             warn_span!("add_resource").in_scope(|| {
                 for error in errors {
@@ -119,5 +133,8 @@ async fn load(
             });
         }
     }
-    Ok(BundleAsset(Arc::new(bundle)))
+    Ok(BundleAsset {
+        bundle: Arc::new(bundle),
+        message_keys,
+    })
 }
