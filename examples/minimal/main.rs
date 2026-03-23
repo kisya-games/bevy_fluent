@@ -11,7 +11,7 @@ pub fn main() {
                 file_path: "examples/minimal/assets".to_string(),
                 ..default()
             }),
-            FluentPlugin,
+            DefaultFluentPlugins,
         ))
         .add_systems(Update, localized_hello_world)
         .run();

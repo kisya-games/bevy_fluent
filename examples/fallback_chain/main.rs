@@ -14,7 +14,7 @@ pub fn main() {
                 file_path: "examples/fallback_chain/assets".to_string(),
                 ..default()
             }),
-            FluentPlugin,
+            DefaultFluentPlugins,
         ))
         .add_systems(Update, localized_hello_world)
         .run();

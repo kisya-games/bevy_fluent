@@ -15,7 +15,7 @@ fn main() {
                 file_path: "examples/ui/assets".to_string(),
                 ..default()
             }),
-            FluentPlugin,
+            DefaultFluentPlugins,
         ))
         .insert_resource(Locale::new(ru::RU).with_default(en::US))
         .insert_resource(Locales(vec![de::DE, en::US, ru::BY, ru::RU]))

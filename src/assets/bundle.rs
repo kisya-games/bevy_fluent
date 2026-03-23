@@ -31,18 +31,20 @@ impl Deref for BundleAsset {
 }
 
 /// [`AssetLoader`](bevy::asset::AssetLoader) implementation for [`BundleAsset`]
-#[derive(Default)]
-pub struct BundleAssetLoader<CustomizeFn>
-where
-    CustomizeFn: Fn(&mut ConcurrentFluentBundle) + Send + Sync + Copy + 'static,
-{
-    pub customize_bundle_fn: CustomizeFn,
+#[derive(TypePath)]
+pub struct BundleAssetLoader {
+    pub customize_bundle: Arc<dyn Fn(&mut ConcurrentFluentBundle) + Send + Sync + 'static>,
 }
 
-impl<CustomizeFn> AssetLoader for BundleAssetLoader<CustomizeFn>
-where
-    CustomizeFn: Fn(&mut ConcurrentFluentBundle) + Send + Sync + Copy + 'static,
-{
+impl Default for BundleAssetLoader {
+    fn default() -> Self {
+        Self {
+            customize_bundle: Arc::new(|_| {}),
+        }
+    }
+}
+
+impl AssetLoader for BundleAssetLoader {
     type Asset = BundleAsset;
     type Settings = ();
     type Error = Error;
@@ -53,7 +55,7 @@ where
         _: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let path = load_context.path();
+        let path = load_context.path().path();
         let mut content = String::new();
         reader.read_to_string(&mut content).await?;
         match path.extension() {
@@ -61,7 +63,7 @@ where
                 load(
                     ron::de::from_str(&content)?,
                     load_context,
-                    self.customize_bundle_fn,
+                    self.customize_bundle.as_ref(),
                 )
                 .await
             }
@@ -69,7 +71,7 @@ where
                 load(
                     serde_yaml::from_str(&content)?,
                     load_context,
-                    self.customize_bundle_fn,
+                    &self.customize_bundle.as_ref(),
                 )
                 .await
             }
@@ -90,7 +92,7 @@ struct Data {
     resources: Vec<PathBuf>,
 }
 
-#[instrument(fields(path = %load_context.path().display()), skip_all)]
+#[instrument(fields(path = %load_context.path().path().display()), skip_all)]
 async fn load(
     data: Data,
     load_context: &mut LoadContext<'_>,
@@ -100,7 +102,7 @@ async fn load(
     customize(&mut bundle);
     for mut path in data.resources {
         if path.is_relative() {
-            if let Some(parent) = load_context.path().parent() {
+            if let Some(parent) = load_context.path().path().parent() {
                 path = parent.join(path);
             }
         }
