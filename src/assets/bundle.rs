@@ -8,29 +8,47 @@ use bevy::{
     reflect::TypePath,
 };
 use fluent::{bundle::FluentBundle, FluentResource};
+use fluent_syntax::ast::Entry;
 use intl_memoizer::concurrent::IntlLangMemoizer;
 use serde::{Deserialize, Serialize};
 use std::{ops::Deref, path::PathBuf, str, sync::Arc};
 use tracing::instrument;
 use unic_langid::LanguageIdentifier;
 
+pub type ConcurrentFluentBundle = FluentBundle<Arc<FluentResource>, IntlLangMemoizer>;
+
 /// [`FluentBundle`](fluent::bundle::FluentBundle) wrapper
 ///
 /// Collection of [`FluentResource`]s for a single locale
 #[derive(Asset, Clone, TypePath)]
-pub struct BundleAsset(pub(crate) Arc<FluentBundle<Arc<FluentResource>, IntlLangMemoizer>>);
+pub struct BundleAsset {
+    /// The fluent bundle containing all resources for this locale
+    pub bundle: Arc<ConcurrentFluentBundle>,
+    /// Message keys contained in this bundle (for validation)
+    pub message_keys: Vec<String>,
+}
 
 impl Deref for BundleAsset {
     type Target = FluentBundle<Arc<FluentResource>, IntlLangMemoizer>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.bundle
     }
 }
 
 /// [`AssetLoader`](bevy::asset::AssetLoader) implementation for [`BundleAsset`]
-#[derive(Default, TypePath)]
-pub struct BundleAssetLoader;
+#[derive(TypePath)]
+pub struct BundleAssetLoader {
+    pub customize_bundle: Arc<dyn Fn(&mut ConcurrentFluentBundle) + Send + Sync + 'static>,
+}
+
+impl Default for BundleAssetLoader {
+    fn default() -> Self {
+        Self {
+            customize_bundle: Arc::new(|_| {}),
+        }
+    }
+}
 
 impl AssetLoader for BundleAssetLoader {
     type Asset = BundleAsset;
@@ -48,10 +66,20 @@ impl AssetLoader for BundleAssetLoader {
         reader.read_to_string(&mut content).await?;
         match path.extension() {
             Some(extension) if extension == "ron" => {
-                load(ron::de::from_str(&content)?, load_context).await
+                load(
+                    ron::de::from_str(&content)?,
+                    load_context,
+                    self.customize_bundle.as_ref(),
+                )
+                .await
             }
             Some(extension) if extension == "yaml" || extension == "yml" => {
-                load(serde_yaml::from_str(&content)?, load_context).await
+                load(
+                    serde_yaml::from_str(&content)?,
+                    load_context,
+                    &self.customize_bundle.as_ref(),
+                )
+                .await
             }
             _ => unreachable!("We already check all the supported extensions."),
         }
@@ -72,8 +100,14 @@ struct Data {
 
 #[instrument(fields(path = %load_context.path().path().display()), skip_all)]
 #[allow(clippy::result_large_err)]
-async fn load(data: Data, load_context: &mut LoadContext<'_>) -> Result<BundleAsset> {
+async fn load(
+    data: Data,
+    load_context: &mut LoadContext<'_>,
+    customize: impl Fn(&mut ConcurrentFluentBundle),
+) -> Result<BundleAsset> {
     let mut bundle = FluentBundle::new_concurrent(vec![data.locale.clone()]);
+    let mut message_keys = Vec::new();
+    customize(&mut bundle);
     for mut path in data.resources {
         if path.is_relative() {
             if let Some(parent) = load_context.path().path().parent() {
@@ -82,6 +116,13 @@ async fn load(data: Data, load_context: &mut LoadContext<'_>) -> Result<BundleAs
         }
         let loaded = load_context.load_builder().load_untyped_value(path).await?;
         let resource = loaded.get::<ResourceAsset>().unwrap();
+
+        for entry in resource.entries() {
+            if let Entry::Message(msg) = entry {
+                message_keys.push(msg.id.name.to_string());
+            }
+        }
+
         if let Err(errors) = bundle.add_resource(resource.0.clone()) {
             warn_span!("add_resource").in_scope(|| {
                 for error in errors {
@@ -90,5 +131,8 @@ async fn load(data: Data, load_context: &mut LoadContext<'_>) -> Result<BundleAs
             });
         }
     }
-    Ok(BundleAsset(Arc::new(bundle)))
+    Ok(BundleAsset {
+        bundle: Arc::new(bundle),
+        message_keys,
+    })
 }
